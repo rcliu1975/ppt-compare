@@ -2,6 +2,10 @@
 
 This is an MVP project that compares two `.pptx` files by extracting slide text and outputting a JSON report.
 
+## Development Plan
+
+See [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) for the current development plan.
+
 ## Prerequisites
 
 1. Install WinPython (already done on your side).
