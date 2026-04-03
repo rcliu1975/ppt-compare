@@ -6,6 +6,10 @@ This is an MVP project that compares two `.pptx` files by extracting slide text 
 
 See [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) for the current development plan.
 
+## Git Workflow
+
+See [GIT_WORKFLOW.md](./GIT_WORKFLOW.md) for the recommended solo-development Git workflow for this project.
+
 ## Prerequisites
 
 1. Install WinPython (already done on your side).
