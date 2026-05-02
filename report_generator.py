@@ -92,7 +92,9 @@ def generate_html_report(report_data: Dict[str, Any], output_path: str) -> None:
     </html>
     """
 
-    template = Template(template_str)
+    from jinja2 import Environment, select_autoescape
+    env = Environment(autoescape=select_autoescape(['html', 'xml']))
+    template = env.from_string(template_str)
     html_content = template.render(report=report_data)
 
     with open(output_path, "w", encoding="utf-8") as f:
