@@ -1,2 +1,10 @@
 python-pptx>=0.6.23
+PyMuPDF>=1.23.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+tqdm>=4.65.0
+Jinja2>=3.1.2
+pywin32>=300; sys_platform == 'win32'
+
+
 

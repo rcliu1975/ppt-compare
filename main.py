@@ -5,7 +5,12 @@ import difflib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from tqdm import tqdm
+
 import utils
+import visualizer
+import cv_compare
+import report_generator
 
 
 def unified_diff(old_text: str, new_text: str, *, from_name: str, to_name: str) -> str:
@@ -28,63 +33,109 @@ def compare_slide_models(old_model: Dict[str, Any], new_model: Dict[str, Any]) -
     old_slides: List[Dict[str, Any]] = old_model.get("slides", [])
     new_slides: List[Dict[str, Any]] = new_model.get("slides", [])
 
-    max_len = max(len(old_slides), len(new_slides))
     results: List[Dict[str, Any]] = []
+    
+    SIMILARITY_THRESHOLD = 0.6
 
-    for i in range(max_len):
-        if i >= len(old_slides):
-            results.append(
-                {
-                    "index": i,
-                    "status": "added",
-                    "old": None,
-                    "new": new_slides[i],
-                }
-            )
-            continue
+    unmatched_old = list(range(len(old_slides)))
+    unmatched_new = list(range(len(new_slides)))
 
-        if i >= len(new_slides):
-            results.append(
-                {
-                    "index": i,
-                    "status": "removed",
-                    "old": old_slides[i],
-                    "new": None,
-                }
-            )
-            continue
+    matches = [] # (old_idx, new_idx, score)
 
-        old_slide = old_slides[i]
-        new_slide = new_slides[i]
+    # 1. Exact matches first (for speed and accuracy)
+    for n_idx in unmatched_new[:]:
+        n_text = new_slides[n_idx].get("text", "") or ""
+        best_o_idx = -1
+        for o_idx in unmatched_old:
+            o_text = old_slides[o_idx].get("text", "") or ""
+            if o_text == n_text:
+                best_o_idx = o_idx
+                break
+        if best_o_idx != -1:
+            matches.append((best_o_idx, n_idx, 1.0))
+            unmatched_old.remove(best_o_idx)
+            unmatched_new.remove(n_idx)
 
-        old_text = old_slide.get("text", "") or ""
-        new_text = new_slide.get("text", "") or ""
+    # 2. Similarity matches
+    for n_idx in unmatched_new[:]:
+        n_text = new_slides[n_idx].get("text", "") or ""
+        best_o_idx = -1
+        best_score = 0.0
+        
+        for o_idx in unmatched_old:
+            o_text = old_slides[o_idx].get("text", "") or ""
+            score = difflib.SequenceMatcher(None, o_text, n_text).ratio()
+            if score > best_score:
+                best_score = score
+                best_o_idx = o_idx
+                
+        if best_score >= SIMILARITY_THRESHOLD and best_o_idx != -1:
+            matches.append((best_o_idx, n_idx, best_score))
+            unmatched_old.remove(best_o_idx)
+            unmatched_new.remove(n_idx)
 
-        if old_text == new_text:
-            results.append(
-                {
-                    "index": i,
-                    "status": "same",
-                    "old": {"text": old_text},
-                    "new": {"text": new_text},
-                }
-            )
+    # Construct the results
+    for old_idx, new_idx, score in matches:
+        old_text = old_slides[old_idx].get("text", "") or ""
+        new_text = new_slides[new_idx].get("text", "") or ""
+        
+        if score == 1.0:
+            results.append({
+                "index": new_idx,
+                "old_index": old_idx,
+                "status": "same",
+                "similarity_score": score,
+                "old": {"text": old_text},
+                "new": {"text": new_text},
+            })
         else:
             diff = unified_diff(
                 old_text,
                 new_text,
-                from_name=f"old_slide_{i}",
-                to_name=f"new_slide_{i}",
+                from_name=f"old_slide_{old_idx}",
+                to_name=f"new_slide_{new_idx}",
             )
-            results.append(
-                {
-                    "index": i,
-                    "status": "changed",
-                    "old": {"text": old_text},
-                    "new": {"text": new_text},
-                    "diff": diff,
-                }
-            )
+            results.append({
+                "index": new_idx,
+                "old_index": old_idx,
+                "status": "changed",
+                "similarity_score": round(score, 4),
+                "old": {"text": old_text},
+                "new": {"text": new_text},
+                "diff": diff,
+            })
+            
+    for n_idx in unmatched_new:
+        new_text = new_slides[n_idx].get("text", "") or ""
+        results.append({
+            "index": n_idx,
+            "old_index": None,
+            "status": "added",
+            "similarity_score": 0.0,
+            "old": None,
+            "new": {"text": new_text},
+        })
+        
+    for o_idx in unmatched_old:
+        old_text = old_slides[o_idx].get("text", "") or ""
+        results.append({
+            "index": None,
+            "old_index": o_idx,
+            "status": "removed",
+            "similarity_score": 0.0,
+            "old": {"text": old_text},
+            "new": None,
+        })
+        
+    # Sort results to be user-friendly: main flow by new index, then removed at the end
+    def sort_key(r: Dict[str, Any]) -> tuple[int, int]:
+        idx = r.get("index")
+        if idx is not None:
+            return (0, idx)
+        else:
+            return (1, r.get("old_index", 0))
+            
+    results.sort(key=sort_key)
 
     return {
         "old_slide_count": len(old_slides),
@@ -139,13 +190,39 @@ def main() -> None:
     if new_path.suffix.lower() != ".pptx":
         raise ValueError(f"New file must be a .pptx: {new_path}")
 
+    print("Rendering old PPTX to images...")
+    old_images = visualizer.render_pptx_slides(str(old_path), "temp_images/old")
+    print("Rendering new PPTX to images...")
+    new_images = visualizer.render_pptx_slides(str(new_path), "temp_images/new")
+
+    print("Extracting text models...")
     old_prs = utils.load_presentation(str(old_path))
     new_prs = utils.load_presentation(str(new_path))
 
     old_model = utils.extract_presentation_model(old_prs)
     new_model = utils.extract_presentation_model(new_prs)
 
+    print("Comparing texts...")
     diff_report = compare_slide_models(old_model, new_model)
+    
+    Path("temp_images/diffs").mkdir(parents=True, exist_ok=True)
+    
+    print("Comparing images...")
+    for slide in tqdm(diff_report["slides"], desc="Comparing Slides"):
+        o_idx = slide.get("old_index")
+        n_idx = slide.get("index")
+        
+        old_img_path = old_images[o_idx] if o_idx is not None and o_idx < len(old_images) else None
+        new_img_path = new_images[n_idx] if n_idx is not None and n_idx < len(new_images) else None
+        
+        slide["old_image_path"] = old_img_path
+        slide["new_image_path"] = new_img_path
+        
+        if slide["status"] in ["same", "changed"] and old_img_path and new_img_path:
+            diff_img_out = f"temp_images/diffs/diff_{o_idx}_{n_idx}.png"
+            images_are_same = cv_compare.compare_images(old_img_path, new_img_path, diff_img_out)
+            if not images_are_same:
+                slide["diff_image_path"] = diff_img_out
 
     report = {
         "old": str(old_path),
@@ -154,7 +231,14 @@ def main() -> None:
     }
 
     utils.write_diff_report(report, str(out_path))
-    print(f"Report saved: {out_path}")
+    print(f"JSON Report saved: {out_path}")
+    
+    html_out = out_path.with_suffix('.html')
+    report_generator.generate_html_report(report, str(html_out))
+    print(f"HTML Report saved: {html_out}")
+    
+    print("Cleaning up temporary images...")
+    report_generator.cleanup_temp_images("temp_images")
 
 
 if __name__ == "__main__":
