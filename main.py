@@ -5,7 +5,12 @@ import difflib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from tqdm import tqdm
+
 import utils
+import visualizer
+import cv_compare
+import report_generator
 
 
 def unified_diff(old_text: str, new_text: str, *, from_name: str, to_name: str) -> str:
@@ -185,13 +190,39 @@ def main() -> None:
     if new_path.suffix.lower() != ".pptx":
         raise ValueError(f"New file must be a .pptx: {new_path}")
 
+    print("Rendering old PPTX to images...")
+    old_images = visualizer.render_pptx_slides(str(old_path), "temp_images/old")
+    print("Rendering new PPTX to images...")
+    new_images = visualizer.render_pptx_slides(str(new_path), "temp_images/new")
+
+    print("Extracting text models...")
     old_prs = utils.load_presentation(str(old_path))
     new_prs = utils.load_presentation(str(new_path))
 
     old_model = utils.extract_presentation_model(old_prs)
     new_model = utils.extract_presentation_model(new_prs)
 
+    print("Comparing texts...")
     diff_report = compare_slide_models(old_model, new_model)
+    
+    Path("temp_images/diffs").mkdir(parents=True, exist_ok=True)
+    
+    print("Comparing images...")
+    for slide in tqdm(diff_report["slides"], desc="Comparing Slides"):
+        o_idx = slide.get("old_index")
+        n_idx = slide.get("index")
+        
+        old_img_path = old_images[o_idx] if o_idx is not None and o_idx < len(old_images) else None
+        new_img_path = new_images[n_idx] if n_idx is not None and n_idx < len(new_images) else None
+        
+        slide["old_image_path"] = old_img_path
+        slide["new_image_path"] = new_img_path
+        
+        if slide["status"] in ["same", "changed"] and old_img_path and new_img_path:
+            diff_img_out = f"temp_images/diffs/diff_{o_idx}_{n_idx}.png"
+            images_are_same = cv_compare.compare_images(old_img_path, new_img_path, diff_img_out)
+            if not images_are_same:
+                slide["diff_image_path"] = diff_img_out
 
     report = {
         "old": str(old_path),
@@ -200,7 +231,14 @@ def main() -> None:
     }
 
     utils.write_diff_report(report, str(out_path))
-    print(f"Report saved: {out_path}")
+    print(f"JSON Report saved: {out_path}")
+    
+    html_out = out_path.with_suffix('.html')
+    report_generator.generate_html_report(report, str(html_out))
+    print(f"HTML Report saved: {html_out}")
+    
+    print("Cleaning up temporary images...")
+    report_generator.cleanup_temp_images("temp_images")
 
 
 if __name__ == "__main__":
