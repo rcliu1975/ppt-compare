@@ -19,4 +19,7 @@ Thumbs.db
 
 # Project outputs
 diff_report.json
+diff_report.html
+bandit_report.json
+temp_images/
 outputs/
