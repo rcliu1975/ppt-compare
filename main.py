@@ -28,63 +28,109 @@ def compare_slide_models(old_model: Dict[str, Any], new_model: Dict[str, Any]) -
     old_slides: List[Dict[str, Any]] = old_model.get("slides", [])
     new_slides: List[Dict[str, Any]] = new_model.get("slides", [])
 
-    max_len = max(len(old_slides), len(new_slides))
     results: List[Dict[str, Any]] = []
+    
+    SIMILARITY_THRESHOLD = 0.6
 
-    for i in range(max_len):
-        if i >= len(old_slides):
-            results.append(
-                {
-                    "index": i,
-                    "status": "added",
-                    "old": None,
-                    "new": new_slides[i],
-                }
-            )
-            continue
+    unmatched_old = list(range(len(old_slides)))
+    unmatched_new = list(range(len(new_slides)))
 
-        if i >= len(new_slides):
-            results.append(
-                {
-                    "index": i,
-                    "status": "removed",
-                    "old": old_slides[i],
-                    "new": None,
-                }
-            )
-            continue
+    matches = [] # (old_idx, new_idx, score)
 
-        old_slide = old_slides[i]
-        new_slide = new_slides[i]
+    # 1. Exact matches first (for speed and accuracy)
+    for n_idx in unmatched_new[:]:
+        n_text = new_slides[n_idx].get("text", "") or ""
+        best_o_idx = -1
+        for o_idx in unmatched_old:
+            o_text = old_slides[o_idx].get("text", "") or ""
+            if o_text == n_text:
+                best_o_idx = o_idx
+                break
+        if best_o_idx != -1:
+            matches.append((best_o_idx, n_idx, 1.0))
+            unmatched_old.remove(best_o_idx)
+            unmatched_new.remove(n_idx)
 
-        old_text = old_slide.get("text", "") or ""
-        new_text = new_slide.get("text", "") or ""
+    # 2. Similarity matches
+    for n_idx in unmatched_new[:]:
+        n_text = new_slides[n_idx].get("text", "") or ""
+        best_o_idx = -1
+        best_score = 0.0
+        
+        for o_idx in unmatched_old:
+            o_text = old_slides[o_idx].get("text", "") or ""
+            score = difflib.SequenceMatcher(None, o_text, n_text).ratio()
+            if score > best_score:
+                best_score = score
+                best_o_idx = o_idx
+                
+        if best_score >= SIMILARITY_THRESHOLD and best_o_idx != -1:
+            matches.append((best_o_idx, n_idx, best_score))
+            unmatched_old.remove(best_o_idx)
+            unmatched_new.remove(n_idx)
 
-        if old_text == new_text:
-            results.append(
-                {
-                    "index": i,
-                    "status": "same",
-                    "old": {"text": old_text},
-                    "new": {"text": new_text},
-                }
-            )
+    # Construct the results
+    for old_idx, new_idx, score in matches:
+        old_text = old_slides[old_idx].get("text", "") or ""
+        new_text = new_slides[new_idx].get("text", "") or ""
+        
+        if score == 1.0:
+            results.append({
+                "index": new_idx,
+                "old_index": old_idx,
+                "status": "same",
+                "similarity_score": score,
+                "old": {"text": old_text},
+                "new": {"text": new_text},
+            })
         else:
             diff = unified_diff(
                 old_text,
                 new_text,
-                from_name=f"old_slide_{i}",
-                to_name=f"new_slide_{i}",
+                from_name=f"old_slide_{old_idx}",
+                to_name=f"new_slide_{new_idx}",
             )
-            results.append(
-                {
-                    "index": i,
-                    "status": "changed",
-                    "old": {"text": old_text},
-                    "new": {"text": new_text},
-                    "diff": diff,
-                }
-            )
+            results.append({
+                "index": new_idx,
+                "old_index": old_idx,
+                "status": "changed",
+                "similarity_score": round(score, 4),
+                "old": {"text": old_text},
+                "new": {"text": new_text},
+                "diff": diff,
+            })
+            
+    for n_idx in unmatched_new:
+        new_text = new_slides[n_idx].get("text", "") or ""
+        results.append({
+            "index": n_idx,
+            "old_index": None,
+            "status": "added",
+            "similarity_score": 0.0,
+            "old": None,
+            "new": {"text": new_text},
+        })
+        
+    for o_idx in unmatched_old:
+        old_text = old_slides[o_idx].get("text", "") or ""
+        results.append({
+            "index": None,
+            "old_index": o_idx,
+            "status": "removed",
+            "similarity_score": 0.0,
+            "old": {"text": old_text},
+            "new": None,
+        })
+        
+    # Sort results to be user-friendly: main flow by new index, then removed at the end
+    def sort_key(r: Dict[str, Any]) -> tuple[int, int]:
+        idx = r.get("index")
+        if idx is not None:
+            return (0, idx)
+        else:
+            return (1, r.get("old_index", 0))
+            
+    results.sort(key=sort_key)
 
     return {
         "old_slide_count": len(old_slides),
