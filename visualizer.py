@@ -7,11 +7,23 @@ from typing import List
 
 
 def check_libreoffice() -> str | None:
-    """Find the LibreOffice executable."""
+    """Find the LibreOffice executable, checking PATH and default Windows locations."""
+    # Check in PATH first
     for cmd in ["soffice", "libreoffice", "libreoffice7.6", "libreoffice7.5"]:
         path = shutil.which(cmd)
         if path:
             return path
+            
+    # Check default Windows installation paths
+    if os.name == 'nt':
+        windows_paths = [
+            r"C:\Program Files\LibreOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"
+        ]
+        for p in windows_paths:
+            if os.path.exists(p):
+                return p
+                
     return None
 
 
