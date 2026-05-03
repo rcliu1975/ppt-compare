@@ -132,16 +132,28 @@ def render_pptx_slides(pptx_path: str, cache_dir: str, prefix: str = "slide") ->
     Falls back to LibreOffice + PyMuPDF on all platforms.
     Gracefully returns an empty list if tools are missing.
     """
+    filename = Path(pptx_path).name
     if os.name == 'nt':
+        print(f"[{filename}] 嘗試使用 Microsoft Office (PowerPoint) 轉換圖片...")
         ms_images = convert_pptx_to_images_msoffice(pptx_path, cache_dir, prefix)
         if ms_images:
+            print(f"[{filename}] 成功使用 Microsoft Office 轉換圖片。")
             return ms_images
+        print(f"[{filename}] Microsoft Office 轉換失敗或未安裝。")
             
     # Fallback to LibreOffice
+    print(f"[{filename}] 嘗試使用 LibreOffice 轉換圖片...")
     pdf_path = convert_pptx_to_pdf(pptx_path, cache_dir)
     if not pdf_path:
+        print(f"[{filename}] LibreOffice 轉換失敗或未安裝。")
+        print(f"[{filename}] 警告: 無法將 PPTX 轉為圖片，將僅進行文字比對 (Text-only fallback)。")
         warnings.warn(f"Skipping visual extraction for {pptx_path} (LibreOffice not found and MS Office not available).")
         return []
         
-    return convert_pdf_to_images(pdf_path, cache_dir, prefix=prefix)
+    images = convert_pdf_to_images(pdf_path, cache_dir, prefix=prefix)
+    if images:
+        print(f"[{filename}] 成功使用 LibreOffice 轉換圖片。")
+    else:
+        print(f"[{filename}] LibreOffice (PyMuPDF) 圖片擷取失敗，將僅進行文字比對。")
+    return images
 
